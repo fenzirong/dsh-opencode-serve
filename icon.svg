@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="OpenCode client bridge for DSH">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#101826"/>
+  <rect x="13" y="17" width="38" height="24" rx="5" fill="none" stroke="#5BE49B" stroke-width="3"/>
+  <path d="M22 26l6 5-6 5" fill="none" stroke="#5BE49B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="33" y1="36" x2="43" y2="36" stroke="#5BE49B" stroke-width="3" stroke-linecap="round"/>
+  <rect x="26" y="46" width="12" height="4" rx="2" fill="#5BE49B"/>
+</svg>

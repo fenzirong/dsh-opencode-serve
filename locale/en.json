@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenCode Client (background serve)",
+    "description": "Registers the local official opencode client's serve process as a native DSH provider, so free-model requests originate from the opencode runtime instead of DSH's own HTTP stack."
+  }
+}

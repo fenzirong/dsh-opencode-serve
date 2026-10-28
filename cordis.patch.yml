@@ -1,0 +1,17 @@
+# dsh-opencode-serve —— 官方 opencode 客户端进程 → DSH 原生 llm provider
+#
+# 路由名不能和 llm-pi-ai 已声明的路由重名，否则 registerAdapter 会抛
+# DUPLICATE_ADAPTER（见 desktop/cordis.patch.yml 顶部注释）。
+- insert:
+    - id: opencode-serve
+      name: '@local/dsh-opencode-serve'
+      config:
+        providerId: opencode-serve
+        # 留空 = 自动找桌面版自带的 opencode-cli.exe（实测 2.2.0）
+        opencodePath: ''
+        # 留空 = 用 DSH 进程的 cwd 作为 opencode 工作目录
+        workdir: ''
+        # 留空 = ~/.dsh/opencode-serve（隔离的 XDG 根 + 强制禁工具的配置）
+        dataRoot: ''
+        agentId: dsh-chat
+        requestTimeoutMs: 600000

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenCode 客户端（后台 serve）",
+    "description": "把本机官方 opencode 客户端的 serve 进程注册成 DSH 原生 provider：请求由 opencode 自己的进程发出，免费模型不受直连指纹限制。"
+  }
+}

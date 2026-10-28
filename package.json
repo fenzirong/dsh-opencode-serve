@@ -1,0 +1,42 @@
+{
+  "name": "@local/dsh-opencode-serve",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把官方 opencode 客户端进程（opencode-cli serve）注册成 DSH 原生 llm provider，请求由 opencode 运行时发出",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "opencode",
+    "llm-adapter",
+    "llm-provider",
+    "free-models"
+  ],
+  "meta": {
+    "title": "OpenCode 客户端（后台 serve）",
+    "description": "由本机官方 opencode 客户端的 serve 进程发出模型请求，DSH 侧表现为普通 provider；无需登录，模型无本地工具权限。"
+  }
+}
