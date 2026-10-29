@@ -28,7 +28,7 @@
  * effect:"deny"}]`，agent 是纯聊天 agent，模型没有本地工具可用。
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -131,6 +131,50 @@ function lastUserText(options) {
   return ''
 }
 
+function truncate(text, max) {
+  const s = String(text || '')
+  if (s.length <= max) return s
+  return s.slice(0, Math.floor(max * 0.6)) + '\n…（已截断 ' + (s.length - max) + ' 字符）…\n' + s.slice(-Math.floor(max * 0.35))
+}
+
+/**
+ * 把 DSH 侧的历史压成一段前导文本。
+ *
+ * 只有在**无法复用已有 opencode 会话**时才需要它：进程重启后被映射丢失、
+ * opencode 会话被清理、或用户中途换了模型（必须新建会话）。此时若只发最后
+ * 一句，模型会失忆；补上前导就等于把上下文带过去。
+ */
+function buildPromptWithHistory(options) {
+  const lastText = lastUserText(options)
+  const msgs = options.messages || []
+  let lastUserIdx = -1
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    if (msgs[i] && msgs[i].role === 'user' && textOfMessage(msgs[i])) { lastUserIdx = i; break }
+  }
+
+  const lines = []
+  for (let i = 0; i < msgs.length; i += 1) {
+    if (i === lastUserIdx) continue
+    const m = msgs[i]
+    const role = m && m.role
+    if (role === 'system' || role === 'developer') continue
+    const t = textOfMessage(m)
+    if (!t) continue
+    const label = role === 'user' ? '用户' : role === 'assistant' ? '助手' : role === 'tool' ? '工具结果' : role
+    lines.push(`[${label}] ${truncate(t, 2000)}`)
+  }
+  // 只保留最近 40 条，避免把上下文窗口塞满
+  const recent = lines.slice(-40)
+
+  const parts = []
+  const sys = typeof options.system === 'string' ? options.system.trim() : ''
+  if (sys) parts.push('[系统指令]\n' + truncate(sys, 8000))
+  if (recent.length) parts.push('[此前对话（按时间顺序）]\n' + recent.join('\n'))
+  if (!parts.length) return lastText
+
+  return parts.join('\n\n') + '\n\n[当前消息]\n' + lastText
+}
+
 // ────────────────────────── server + SSE 管理 ──────────────────────────
 
 function createRuntime(cfg) {
@@ -139,7 +183,31 @@ function createRuntime(cfg) {
   let server = null
   let sseAbort = null
   const waiters = new Map()   // opencodeSessionID -> Set<fn>
-  const sessions = new Map()  // dshSessionId -> opencodeSessionID
+  const sessions = new Map()  // dshSessionId -> { sid, model, updatedAt }
+  const mapFile = join(root, 'sessions.json')
+  let mapLoaded = false
+
+  /** 会话映射落盘：进程重启后仍接回同一个 opencode 会话 = 上下文不丢。 */
+  function loadMap() {
+    if (mapLoaded) return
+    mapLoaded = true
+    try {
+      if (!existsSync(mapFile)) return
+      const raw = JSON.parse(readFileSync(mapFile, 'utf8'))
+      for (const [k, v] of Object.entries(raw || {})) {
+        if (v && typeof v.sid === 'string') sessions.set(k, { sid: v.sid, model: v.model, updatedAt: v.updatedAt })
+      }
+    } catch {}
+  }
+
+  function saveMap() {
+    try {
+      mkdirSync(root, { recursive: true })
+      const out = {}
+      for (const [k, v] of sessions) out[k] = v
+      writeFileSync(mapFile, JSON.stringify(out, null, 2), 'utf8')
+    } catch {}
+  }
   const authHeader = (pw) => 'Basic ' + Buffer.from(`opencode:${pw}`).toString('base64')
 
   function prepareDirs() {
@@ -258,10 +326,27 @@ function createRuntime(cfg) {
     return json
   }
 
+  /**
+   * 解析本轮的 opencode 会话。
+   *
+   * 返回 { sid, fresh }：`fresh = true` 表示**新建**了会话——换模型、进程重启后
+   * 映射失效、或 opencode 侧会话被清理都会走到这里。调用方必须把 DSH 侧历史
+   * 作为前导补发，否则模型会失忆（这正是"换模型后上下文还在"的关键）。
+   */
   async function ensureSession(srv, dshSessionId, model) {
+    loadMap()
     const cached = sessions.get(dshSessionId)
-    // 会话中途换模型时必须新建 opencode 会话，否则沿用旧模型
-    if (cached && cached.model === model) return cached.sid
+    if (cached && cached.model === model) {
+      try {
+        await api(srv, `/api/session/${cached.sid}`, { method: 'GET' })
+        return { sid: cached.sid, fresh: false }
+      } catch (err) {
+        const gone = err && (err.status === 404 || err.status === 401)
+        if (!gone) return { sid: cached.sid, fresh: false }
+        sessions.delete(dshSessionId)
+        saveMap()
+      }
+    }
     const created = await api(srv, '/api/session', {
       method: 'POST',
       body: JSON.stringify({
@@ -271,13 +356,14 @@ function createRuntime(cfg) {
     })
     const sid = created && (created.id || (created.data && created.data.id))
     if (!sid) throw new Error('opencode 未返回 session id')
-    sessions.set(dshSessionId, { sid, model })
-    return sid
+    sessions.set(dshSessionId, { sid, model, updatedAt: Date.now() })
+    saveMap()
+    return { sid, fresh: true }
   }
 
   function forget(dshSessionId, sid) {
     const cur = sessions.get(dshSessionId)
-    if (cur && (!sid || cur.sid === sid)) sessions.delete(dshSessionId)
+    if (cur && (!sid || cur.sid === sid)) { sessions.delete(dshSessionId); saveMap() }
   }
 
   async function interrupt(srv, sid) {
@@ -285,7 +371,9 @@ function createRuntime(cfg) {
       await api(srv, `/api/session/${sid}/interrupt`, { method: 'POST', body: '{}' })
     } catch {}
     // 打断后该会话已不可信，丢弃映射
-    for (const [k, v] of sessions) if (v.sid === sid) sessions.delete(k)
+    let dirty = false
+    for (const [k, v] of sessions) if (v.sid === sid) { sessions.delete(k); dirty = true }
+    if (dirty) saveMap()
   }
 
   function dispose() {
@@ -367,12 +455,19 @@ function createAdapter(cfg) {
 
       const dshSession = options.sessionId || 'default'
       let sid
+      let fresh = false
       try {
-        sid = await rt.ensureSession(srv, dshSession, model)
+        const resolved = await rt.ensureSession(srv, dshSession, model)
+        sid = resolved.sid
+        fresh = resolved.fresh
       } catch (err) {
         yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SESSION_FAILED', message: String((err && err.message) || err), status: err && err.status } } }
         return
       }
+
+      // 会话是新建的（换模型 / 进程重启后映射失效 / 会话被清理）→ 把 DSH 侧历史
+      // 作为前导一次带上，模型才不会失忆；能复用旧会话时只发本次消息。
+      let promptText = fresh ? buildPromptWithHistory(options) : prompt
 
       const queue = []
       let notify = null
@@ -388,7 +483,7 @@ function createAdapter(cfg) {
 
       const sendPrompt = (targetSid) => rt.api(srv, `/api/session/${targetSid}/prompt`, {
         method: 'POST',
-        body: JSON.stringify({ text: prompt }),
+        body: JSON.stringify({ text: promptText }),
       })
       const bailOut = (err) => {
         set.delete(onEvent)
@@ -404,10 +499,12 @@ function createAdapter(cfg) {
           yield bailOut(err)
           return
         }
-        // 会话/服务已失效（重启或被清理）：丢弃映射，重建后重试一次
+        // 会话/服务已失效（重启或被清理）：丢弃映射，重建后带历史重试一次
         rt.forget(dshSession, sid)
         try {
-          sid = await rt.ensureSession(srv, dshSession, model)
+          const retried = await rt.ensureSession(srv, dshSession, model)
+          sid = retried.sid
+          if (retried.fresh) promptText = buildPromptWithHistory(options)
           set.delete(onEvent)
           let retrySet = rt.waiters.get(sid)
           if (!retrySet) { retrySet = new Set(); rt.waiters.set(sid, retrySet) }

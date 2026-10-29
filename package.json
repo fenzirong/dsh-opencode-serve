@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-opencode-serve",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "把官方 opencode 客户端进程（opencode-cli serve）注册成 DSH 原生 llm provider，请求由 opencode 运行时发出",

@@ -49,7 +49,35 @@ https://opencode.ai  （请求由 opencode 运行时发出）
 | `session.execution.succeeded` \| `.failed` | 结束本轮 / 错误收尾 |
 | `POST /api/session/{id}/interrupt` | 响应 DSH 的中断信号 |
 
-多轮对话由 opencode 会话自身维护：同一 DSH 会话复用同一个 opencode `ses_`，不需要重放历史文本。
+## 上下文如何保留（换模型 / 重启都不丢）
+
+同一 DSH 会话始终复用同一个 opencode `ses_`，因此多轮对话由 opencode 会话自身维护，不需要每轮重放历史。
+映射关系落盘在 `<dataRoot>/sessions.json`：
+
+```json
+{ "switch-1": { "sid": "ses_e7a8d146affe…", "model": "glm-5.3-flash-free", "updatedAt": 1793240263576 } }
+```
+
+保活与兜底策略：
+
+| 情况 | 行为 |
+| --- | --- |
+| 同会话、同模型，进程未重启 | 直接复用 `ses_`，只发送本轮消息（最省 token） |
+| **中途换了模型** | 旧会话绑定旧模型，必须新建 `ses_`；此时把 DSH 侧历史压成前导文本（`[系统指令]` + `[此前对话]` + `[当前消息]`）随首轮一起发送，**换模型不丢上下文** |
+| 进程重启（映射从 `sessions.json` 复原） | 复用原 `ses_`，只发送本轮消息；上下文继续 |
+| opencode 侧会话被清理（`GET /api/session/{id}` 返回 404） | 丢弃映射、新建会话，并同样用历史前导兜底 |
+| 映射文件缺失/损坏（首次安装） | 新建会话；若 DSH 已带历史，则同样补发前导 |
+
+前导只保留最近 40 条消息、单条截断 2000 字符（系统提示 8000），避免把上下文窗口一次塞满。
+
+实测（T1→T4）：
+
+```
+T1 首轮       deepseek-v4.1-flash-free → "记住了"      （暗号：蓝鲸42）
+T2 换模型     glm-5.3-flash-free       → "蓝鲸42"      ← 历史前导生效
+T3 同模型续聊  glm-5.3-flash-free       → "蓝鲸42"
+T4 新进程续聊  glm-5.3-flash-free       → "蓝鲸42"      ← 仅靠 sessions.json + opencode 会话记忆
+```
 
 ## 安全模型
 
